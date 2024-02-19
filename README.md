@@ -2,7 +2,7 @@
 
 ## Install Requirements
 - `Python version >= 3.8`
-- `PyTorch version >= 2.0
+- `PyTorch version >= 2.0`
   
 Install the package required:
 ```sh
