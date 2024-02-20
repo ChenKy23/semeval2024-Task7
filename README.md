@@ -1,7 +1,7 @@
 # YNU-HPCC at semeval2024-task7
 
 ## Install Requirements
-- `Python version >= 3.8`
+- `Python version >= 3.9`
 - `PyTorch version >= 2.0.0`
   
 Install the package required:
