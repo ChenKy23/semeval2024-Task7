@@ -21,24 +21,24 @@ from instruction_config import *
 def train_and_evaluate(args, tokenizer, tokenized_dataset):
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
-
+        covert_dict = {'entailment': 0, 'contradiction': 1, 'neutral': 2}
         if isinstance(predictions, tuple):
             predictions = predictions[0]
 
         decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-        # Replace -100 in the labels
+        # Replace -100 in the labels as we can't decode them.
         labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        decoded_preds = list(map(int, decoded_preds))
-        decoded_labels = list(map(int, decoded_labels))
+        decoded_preds = [covert_dict.get(item) for item in decoded_preds]
+        decoded_labels = [covert_dict.get(item) for item in decoded_labels]
 
         macro_f1 = f1_metric.compute(predictions=decoded_preds, references=decoded_labels, average="macro")
         micro_f1 = f1_metric.compute(predictions=decoded_preds, references=decoded_labels, average="micro")
 
         result = {}
-        result['micro_f1'] = micro_f1['f1']
-        result['macro_f1'] = macro_f1['f1']
+        result['macro_f1'] = macro_f1['f1']*100
+        result['micro_f1'] = micro_f1['f1']*100
         return result
 
     model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name)
@@ -86,14 +86,12 @@ def train_and_evaluate(args, tokenizer, tokenized_dataset):
 
 def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_test=None):
     def get_predict(model, tokenized_dataset, batch_size = 4, max_new_tokens = 128, sample_set = 'test', device = 'cuda'):
-        """
-        Get the predictions from the trained model.
-        """
         def collate_fn(batch):
             input_ids = [torch.tensor(example['input_ids']) for example in batch]
             attention_mask = [torch.tensor(example['attention_mask']) for example in batch]
             input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)
             attention_mask = pad_sequence(attention_mask, batch_first=True, padding_value=tokenizer.pad_token_id)
+            
             return input_ids, attention_mask
         
         dataloader = DataLoader(tokenized_dataset[sample_set], batch_size=batch_size, collate_fn=collate_fn)
@@ -104,22 +102,26 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
         for inputs, attention_mask in tqdm(dataloader):
             inputs = inputs.to(device)
             attention_mask = attention_mask.to(device)
+
             output_ids = model.generate(input_ids=inputs, attention_mask=attention_mask, max_new_tokens=max_new_tokens)
             
             decode_pred_ans = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
 
             preds += decode_pred_ans
         
-        preds = list(map(int, preds))
+        preds = [covert_dict.get(item) for item in preds]
+        
         return preds
 
+    covert_dict = {'entailment': 0, 'contradiction': 1, 'neutral': 2}
+
     f1_metric = evaluate.load("./f1.py")
-    
+
     model = AutoModelForSeq2SeqLM.from_pretrained(args.model_checkpoint)
 
-    decoded_preds = get_predict(model=model, tokenized_dataset = tokenized_dataset, batch_size=args.per_device_eval_batch_size, max_new_tokens=25, sample_set='test', device = 'cuda')
+    decoded_preds = get_predict(model=model, tokenized_dataset = tokenized_dataset, batch_size=25, max_new_tokens=25, sample_set='test', device = 'cuda')
 
-    labels = [sample["magnitude"] for sample in dataset_test]
+    labels = [covert_dict.get(sample["answer"].lower().strip()) for sample in dataset_test]
 
     macro_f1 = f1_metric.compute(predictions=decoded_preds, references=labels, average="macro")
     micro_f1 = f1_metric.compute(predictions=decoded_preds, references=labels, average="micro")
@@ -130,12 +132,11 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
     print(f"micro_f1: {micro_f1}")
     print(f"macro_f1: {macro_f1}")
 
-    save_res = [{"magnitude": sample["magnitude"], "masked": sample["masked"]} for sample in dataset_test]
+    save_res = [{"statement1": sample["statement1"], "statement2": sample["statement2"], "options": sample['options'], "answer": sample['answer']} for sample in dataset_test]
 
     for res, preds in zip(save_res, decoded_preds):
         res['preds'] =  preds
 
-    os.makedirs(args.output_dir, exist_ok=True)
     json_file_path = os.path.join(args.output_dir, args.output_file_name)
 
     print("save predict res to: "+json_file_path)
@@ -144,18 +145,14 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
 
 def run(args):
     def preprocess_function(sample):
-        # add prefix to the input
         if args.is_digit_base:
-            if args.dataset_type == "headline":
-                inputs = [input_template.format(masked=masked) for masked in sample["title_char"]]
-            else:
-                inputs = [input_template.format(masked=masked) for masked in sample["comment_char"]]
+            inputs = [input_template.format(statement1=statement1.strip(), statement2=statement2.strip(), options=options.lower().strip()) for statement1, statement2, options in zip(sample["statement1_char"], sample["statement2_char"], sample['options'])]
         else:
-            inputs = [input_template.format(masked=masked) for masked in sample["masked"]]
+            inputs = [input_template.format(statement1=statement1.strip(), statement2=statement2.strip(), options=options.lower().strip()) for statement1, statement2, options in zip(sample["statement1"], sample["statement2"], sample['options'])]
 
         model_inputs = tokenizer(inputs, truncation=False)
 
-        labels = [str(magnitude) for magnitude in sample["magnitude"]]
+        labels = [answer.strip().lower() for answer in sample["answer"]]
 
         model_labels = tokenizer(text_target=labels, truncation=False)
 
@@ -164,19 +161,13 @@ def run(args):
 
     set_seed(args.seed)
 
-    qp_template = instr_template()
-    qp_template.load_qp_template()
+    qnli_template = instr_template()
+    qnli_template.load_qnli_template()
 
-    if args.dataset_type == "headline":
-        if args.has_demonstrations == True:
-            input_template = qp_template.input_template['icl_headline']
-        else:
-            input_template = qp_template.input_template['instr_headline']
-    elif args.dataset_type == "comment":
-        if args.has_demonstrations == True:
-            input_template = qp_template.input_template['icl_comment']
-        else:
-            input_template = qp_template.input_template['instr_comment']
+    if args.has_demonstrations == True:
+        input_template = qnli_template.input_template['icl']
+    else:
+        input_template = qnli_template.input_template['instr']
 
     model_name = args.model_name
     data_train_pth = args.data_train_pth
@@ -187,51 +178,50 @@ def run(args):
 
     if args.task == "train":
         dataset_train = read_jsonl(data_train_pth)[0]
-        dataset_train = Dataset.from_dict(trans_to_dict_qp(dataset_train))
+        dataset_train = Dataset.from_dict(trans_to_dict_qnli(dataset_train))
 
         datasets['train'] = dataset_train
         if args.has_dev:
             dataset_dev = read_jsonl(data_dev_pth)[0]
-            dataset_dev = Dataset.from_dict(trans_to_dict_qp(dataset_dev))
+            dataset_dev = Dataset.from_dict(trans_to_dict_qnli(dataset_dev))
             datasets['dev'] = dataset_dev
         else:
             dataset_test = read_jsonl(data_test_pth)[0]
-            dataset_test = Dataset.from_dict(trans_to_dict_qp(dataset_test))
+            dataset_test = Dataset.from_dict(trans_to_dict_qnli(dataset_test))
             datasets['dev'] = dataset_test
         
-        tokenized_dataset = datasets.map(preprocess_function, batched=True, remove_columns=["masked", "magnitude"])
+        tokenized_dataset = datasets.map(preprocess_function, batched=True, remove_columns=["statement1", "statement2","statement1_char", "statement2_char", "options", "answer"])
         train_and_evaluate(args, tokenizer, tokenized_dataset)
     else:
         dataset_test = read_jsonl(data_test_pth)[0]
-        dataset_test = Dataset.from_dict(trans_to_dict_qp(dataset_test))
+        dataset_test = Dataset.from_dict(trans_to_dict_qnli(dataset_test))
         datasets['test'] = dataset_test
-        tokenized_dataset = datasets.map(preprocess_function, batched=True, remove_columns=["masked", "magnitude"])
+        tokenized_dataset = datasets.map(preprocess_function, batched=True, remove_columns=["statement1", "statement2","statement1_char", "statement2_char", "options", "answer"])
         predict_and_save_res(args, tokenizer, tokenized_dataset, dataset_test)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="training code")
-    parser.add_argument("--data_train_pth", default='./Quantitative-101/QP/Numeracy600K_comment_train.json', help="dataset_train's path")
-    parser.add_argument("--data_dev_pth", default='./Quantitative-101/QP/Numeracy600K_comment_dev.json', help="dataset_dev's path")
-    parser.add_argument("--data_test_pth", default='./Quantitative-101/QP/Numeracy600K_comment_test.json', help="dataset_test's path")
+    parser.add_argument("--data_train_pth", default='./Quantitative-101/QNLI/QNLI-Stress Test/QNLI-Stress Test_train.json', help="dataset_train's path")
+    parser.add_argument("--data_dev_pth", default='./Quantitative-101/QNLI/QNLI-Stress Test/QNLI-Stress Test_dev.json', help="dataset_dev's path")
+    parser.add_argument("--data_test_pth", default='./Quantitative-101/QNLI/QNLI-Stress Test/QNLI-Stress Test_test.json', help="dataset_test's path")
     parser.add_argument("--is_digit_base", default=False, help="whether to use digit")
-    parser.add_argument("--dataset_type", default='comment', help="comment or headline")
-    parser.add_argument("--has_demonstrations", default=True, help="whether has demonstrations")
-    parser.add_argument("--model_name", default='google/flan-t5-base', help="model name")
     parser.add_argument("--has_dev", default=True, help="whether has dev dataset")
+    parser.add_argument("--has_demonstrations", default=False, help="whether has demonstrations")
+    parser.add_argument("--model_name", default='google/flan-t5-base', help="model name")
     parser.add_argument("--seed", default=42, help="set seed")
     parser.add_argument("--model_checkpoint", default='', help="model checkpoint's path")
     parser.add_argument("--task", default='eval', help="train or predict")
     parser.add_argument("--evaluation_strategy", default='epoch', help="evaluation_strategy")
     parser.add_argument("--save_strategy", default='epoch', help="save_strategy")
-    parser.add_argument('--per_device_train_batch_size', type=int, default=30)
-    parser.add_argument('--per_device_eval_batch_size', type=int, default=30)
+    parser.add_argument('--per_device_train_batch_size', type=int, default=20)
+    parser.add_argument('--per_device_eval_batch_size', type=int, default=20)
     parser.add_argument('--lr', type=float, default=3e-5)
     parser.add_argument('--warm_up_radio', type=float, default=0.1)
     parser.add_argument('--gradient_accumulation_steps', default=1, help='gradient_accumulation')
-    parser.add_argument('--num_train_epochs', default=50)
-    parser.add_argument('--output_model_path', type=str, default='./qp_model')
+    parser.add_argument('--num_train_epochs', default=20)
+    parser.add_argument('--output_model_path', type=str, default='./qnli_stress_model')
     parser.add_argument('--weight_decay', default=0.01, help='dropout_rate')
-    parser.add_argument("--output_file_name", default="save_res_qp.json", help="output file's name")
+    parser.add_argument("--output_file_name", default="qnli_stress_res.json", help="output file's name")
     parser.add_argument("--output_dir", default="save_res", help="output file's dir")
     args = parser.parse_args()
      

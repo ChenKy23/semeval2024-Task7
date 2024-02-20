@@ -63,3 +63,22 @@ def trans_to_dict_qnli(data):
             data_dic[key].append(sstr)
     
     return data_dic
+
+def trans_to_dict_qqa(data):
+    data = remove_key_json(data, ['type', 'question_sci_10E', 'question_sci_10E_char', 'question_mask'])
+
+    keys = data[0].keys()
+    data_dic = {}
+
+    for key in keys:
+        data_dic[key] = []
+
+    for item in data:
+        for key in keys:
+            sstr = item[key]
+
+            sstr = str(sstr)
+            
+            data_dic[key].append(sstr.strip())
+    
+    return data_dic
