@@ -206,7 +206,7 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
         for inputs, attention_mask in tqdm(dataloader):
             inputs = inputs.to(device)
             attention_mask = attention_mask.to(device)
-            # output_ids = model.generate(inputs, do_sample=True, temperature=0.7, max_length=max_length, num_beams = 5)
+
             output_ids = model.generate(input_ids=inputs, attention_mask=attention_mask, max_new_tokens=max_new_tokens)
             
             decode_pred_ans = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
