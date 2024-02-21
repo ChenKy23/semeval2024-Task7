@@ -175,7 +175,6 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 构造 JSON 文件的完整路径
     json_file_path = os.path.join(args.output_dir, args.output_file_name)
 
     print("save predict res to: "+json_file_path)
