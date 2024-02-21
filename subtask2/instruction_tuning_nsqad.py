@@ -297,7 +297,7 @@ def run(args):
     datasets = DatasetDict()
 
     if args.task == "train":
-        dataset_train = read_jsonl(data_train_pth)[0][:1000]
+        dataset_train = read_jsonl(data_train_pth)[0]
         data_split = int(len(dataset_train)*0.9)
         random.seed(args.seed)
         random.shuffle(dataset_train)

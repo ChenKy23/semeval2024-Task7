@@ -207,7 +207,7 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="training code")
     parser.add_argument("--data_train_pth", default='./Quantitative-101/QQA/QQA_train.json', help="dataset_train's path")
-    parser.add_argument("--data_dev_pth", default='./Quantitative-101/QQA/QQA_test.json', help="dataset_dev's path")
+    parser.add_argument("--data_dev_pth", default='./Quantitative-101/QQA/QQA_dev.json', help="dataset_dev's path")
     parser.add_argument("--data_test_pth", default='./Quantitative-101/QQA/QQA_test.json', help="dataset_test's path")
     parser.add_argument("--is_digit_base", default=False, help="whether to use digit")
     parser.add_argument("--has_dev", default=True, help="whether has dev dataset")
