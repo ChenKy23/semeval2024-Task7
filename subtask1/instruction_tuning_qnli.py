@@ -171,9 +171,9 @@ if __name__ == '__main__':
     parser.add_argument('--warm_up_radio', type=float, default=0.1)
     parser.add_argument('--gradient_accumulation_steps', default=1, help='gradient_accumulation')
     parser.add_argument('--num_train_epochs', default=30)
-    parser.add_argument('--output_model_path', type=str, default='./qnli_model')
+    parser.add_argument('--output_model_path', type=str, default='./qp_flan_t5')
     parser.add_argument('--weight_decay', default=0.01, help='dropout_rate')
-    parser.add_argument("--output_file_name", default="qnli_res.json", help="output file's name")
+    parser.add_argument("--output_file_name", default="save_res_qnli.json", help="output file's name")
     parser.add_argument("--output_dir", default="save_res", help="output file's dir")
     args = parser.parse_args()
      

@@ -83,13 +83,13 @@ C {{option3}}
 D {{option4}}"""
         
         self.input_template['icl_en'] = f"""According to the news, Choose the correct option for [Num] in the following questions.
-# news: {{news_article}}
-# question: {{question}}
-# option:
-# A {{option1}}
-# B {{option2}}
-# C {{option3}} 
-# D {{option4}}"""
+news: {{news_article}}
+question: {{question}}
+option:
+A {{option1}}
+B {{option2}}
+C {{option3}} 
+D {{option4}}"""
 
         self.label_template['ans'] = f"""{{ans}} {{num}}"""
 
@@ -330,7 +330,7 @@ if __name__ == '__main__':
     parser.add_argument("--model_checkpoint", default='', help="model checkpoint's path")
     parser.add_argument("--task", default='train', help="train or predict")
     parser.add_argument("--evaluation_strategy", default='epoch', help="evaluation_strategy")
-    parser.add_argument("--save_strategy", default='no', help="save_strategy")
+    parser.add_argument("--save_strategy", default='epoch', help="save_strategy")
     parser.add_argument('--per_device_train_batch_size', type=int, default=2)
     parser.add_argument('--per_device_eval_batch_size', type=int, default=2)
     parser.add_argument('--lr', type=float, default=5e-5)
@@ -339,7 +339,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_train_epochs', default=10)
     parser.add_argument('--output_model_path', type=str, default='./nsqad-model')
     parser.add_argument('--weight_decay', default=0.01, help='dropout_rate')
-    parser.add_argument("--output_file_name", default="nsqad_res.json", help="output file's name")
+    parser.add_argument("--output_file_name", default="save_res_qnli.json", help="output file's name")
     parser.add_argument("--output_dir", default="save_res", help="output file's dir")
     args = parser.parse_args()
      

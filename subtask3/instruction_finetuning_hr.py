@@ -10,11 +10,7 @@ from random import randrange
 import argparse
 import os
 
-from moverscore_v2 import word_mover_score, get_idf_dict
-
 from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType, PeftModel, PeftConfig
-
-from bert_score import score
 
 import evaluate
 import numpy as np
@@ -23,8 +19,6 @@ from tqdm import tqdm
 from util import *
 
 from instruction_config import *
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def train_and_evaluate(args, tokenizer, tokenized_dataset):
     def compute_metrics(eval_preds):
@@ -39,17 +33,27 @@ def train_and_evaluate(args, tokenizer, tokenized_dataset):
         # Some simple post-processing
         decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
-        result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-        result = {k: round(v * 100, 4) for k, v in result.items()}
-        prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        result["gen_len"] = np.mean(prediction_lens)
+        if predict_type['is_cot']:
+            decode_labels_ans = batch_find_ans(decoded_labels)
+            decode_pred_ans = batch_find_ans(decoded_preds)
+        else:
+            decode_labels_ans = decoded_labels
+            decode_pred_ans = decoded_preds
+
+        count_equal_ans = sum(x == y for x, y in zip(decode_labels_ans, decode_pred_ans))
+
+        num_acc = round(count_equal_ans/len(decode_labels_ans)*100, 4)
+        result = {}
+        result['num_acc'] = num_acc
         return result
 
+    predict_type = {}
+    predict_type['is_cot'] = args.is_cot
     large_scale = False
-    call_back = None
+    call_back = []
     if args.model_name in ['google/flan-t5-xxl', 'google/flan-t5-xl']:
         large_scale = True
-        call_back= [PeftSavingCallback]
+        call_back.append(PeftSavingCallback)
 
     if large_scale:
         model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name, load_in_8bit=True, use_cache=False, device_map="auto")
@@ -67,8 +71,6 @@ def train_and_evaluate(args, tokenizer, tokenized_dataset):
         model.print_trainable_parameters()
     else:
         model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name)
-
-    metric = evaluate.load("./rouge.py")
 
     label_pad_token_id = -100
 
@@ -111,7 +113,7 @@ def train_and_evaluate(args, tokenizer, tokenized_dataset):
     trainer.train()
 
 def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_test=None):
-    def get_predict_and_labels(model, tokenized_dataset, batch_size = 4, max_length = 128, sample_set = 'test'):
+    def get_predict(model, tokenized_dataset, batch_size = 4, max_length = 128, sample_set = 'test', device = 'cuda'):
         """
         Get the predictions from the trained model.
         """
@@ -122,56 +124,70 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
         
         dataloader = DataLoader(tokenized_dataset[sample_set], batch_size=batch_size, collate_fn=collate_fn)
         predicted_output = []
+        pred_ans = []
+        model.to(device)
+        print('Model loaded to: ', device)
 
         for inputs in tqdm(dataloader):
-            inputs = inputs.to('cuda')
-            output_ids = model.generate(inputs, max_length=max_length, num_beams = 5)
+            inputs = inputs.to(device)
+            output_ids = model.generate(input_ids=inputs, max_new_tokens=max_length)
             output_texts = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-            for output_text in output_texts:
-                predicted_output.append(output_text)
-            
-        return predicted_output
+            if args.is_cot:
+                decode_pred_ans = batch_find_ans(output_texts)
+            else:
+                decode_pred_ans = output_texts
 
-    metric = evaluate.load("./rouge.py")
+            for ans, pred in zip(decode_pred_ans, output_texts):
+                predicted_output.append(pred)
+                pred_ans.append(ans)
+            
+        return predicted_output, pred_ans
 
     if args.model_name in ['google/flan-t5-xxl', 'google/flan-t5-xl']:
+        model = AutoModelForSeq2SeqLM.from_pretrained(args.model_checkpoint)
+    else:
         config = PeftConfig.from_pretrained(args.model_checkpoint)
         model = AutoModelForSeq2SeqLM.from_pretrained(config.base_model_name_or_path,  load_in_8bit=True,  device_map={'': 0})
         model = PeftModel.from_pretrained(model, args.model_checkpoint, device_map={'': 0})
-    else:
-        model = AutoModelForSeq2SeqLM.from_pretrained(args.model_checkpoint)
-        model.to('cuda')
 
-    predicted_output = get_predict_and_labels(model=model, tokenized_dataset = tokenized_dataset, batch_size=args.per_device_eval_batch_size, max_length=64, sample_set='test')
+    model.eval()
 
-    labels_output = [sample['headline'] for sample in dataset_test]
+    predicted_output, pred_ans = get_predict(model=model, tokenized_dataset = tokenized_dataset, batch_size=args.per_device_eval_batch_size, max_length=512, sample_set='test')
 
-    rogue = metric.compute(predictions=predicted_output, references=labels_output, use_stemmer=True)
+    label_ans = [sample["ans"] for sample in dataset_test]
+    label_types = [1 if "Paraphrase" in sample['calculation'] or "Round" in sample["calculation"] or "Subtract" in sample['calculation'] or "Add" in sample['calculation'] or "Span" in sample['calculation'] or "Divide" in sample['calculation'] or "Multiply" in sample['calculation'] else 0 for sample in dataset_test]
 
-    # print results 
-    print(f"Rogue1: {rogue['rouge1']* 100:2f}%")
-    print(f"rouge2: {rogue['rouge2']* 100:2f}%")
-    print(f"rougeL: {rogue['rougeL']* 100:2f}%")
-    print(f"rougeLsum: {rogue['rougeLsum']* 100:2f}%")
+    save_res = [{"news": sample["news"], "masked headline": sample["masked headline"], "calculation": sample["calculation"], "ans": sample["ans"]} for sample in dataset_test]
 
-    P, R, F1 = score(predicted_output, labels_output, batch_size=4, device='cuda', lang='en', rescale_with_baseline=True, use_fast_tokenizer=True)
+    label_ans_copy = []
+    label_ans_reason = []
 
-    print(f"System level P score: {P.mean()*100:.3f}")
-    print(f"System level R score: {R.mean()*100:.3f}")
-    print(f"System level F1 score: {F1.mean()*100:.3f}")
+    pred_ans_copy = []
+    pred_ans_reason = []
 
-    idf_dict_hyp = get_idf_dict(predicted_output)
-    idf_dict_ref = get_idf_dict(labels_output)
-    mover_score = word_mover_score(labels_output, predicted_output, idf_dict_ref, idf_dict_hyp, stop_words=[], n_gram=1, remove_subwords=True)
-    mover = np.mean(mover_score)
-    print("MoverScore: %.6f"%(mover))
+    for ans, pred, tp in zip(label_ans,pred_ans,label_types):
+        if tp == 0:
+            label_ans_copy.append(ans)
+            pred_ans_copy.append(pred)
+        else:
+            label_ans_reason.append(ans)
+            pred_ans_reason.append(pred)
 
-    cal_num_acc(predicted_output, args.num_gt_path, args.num_type_path)
+    count_equal_ans = sum(x == y for x, y in zip(label_ans, pred_ans))
+    count_equal_ans_copy = sum(x == y for x, y in zip(label_ans_copy, pred_ans_copy))
+    count_equal_ans_reason = sum(x == y for x, y in zip(label_ans_reason, pred_ans_reason))
 
-    save_res = [{"news": sample["news"], "headline": sample["headline"]} for sample in dataset_test]
+    num_acc = round(count_equal_ans/len(label_ans)*100, 3)
+    num_acc_copy = round(count_equal_ans_copy/len(label_ans_copy)*100, 3)
+    num_acc_reason = round(count_equal_ans_reason/len(label_ans_reason)*100, 3)
 
-    for res, headline in zip(save_res, predicted_output):
-        res['generation'] = headline
+    print(f"Num_acc: {num_acc}") 
+    print(f"Num_acc_copy: {num_acc_copy}")
+    print(f"Num_acc_reason: {num_acc_reason}")
+
+    for res, ans, pred in zip(save_res, pred_ans, predicted_output):
+        res['pred_ans'] = ans
+        res['pred_cot'] = pred
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -182,33 +198,35 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
     with open(json_file_path, "w", encoding="utf-8") as json_file:
         json.dump(save_res, json_file, ensure_ascii=False)
 
-
 def run(args):
     def preprocess_function(sample):
         # add prefix to the input
-        if args.has_demonstrations:
-            inputs = [input_template.format(similar_news=similar_news, similar_headline=similar_headline, news=news) for similar_news, similar_headline, news in zip(sample["similar_news"], sample["similar_headline"], sample["news"])]
-        else:
-            inputs = [input_template.format(news=news) for news in sample["news"]]
-        # tokenize inputs
+        inputs = [input_template.format(news = news, mskh = mskh) for news, mskh in zip(sample["news"], sample["masked headline"])]
+
         model_inputs = tokenizer(inputs, truncation=False)
 
-        # Tokenize targets with the `text_target` keyword argument
-        labels = tokenizer(text_target=sample["headline"], truncation=False)
+        if not args.is_cot or args.task != "train": # test set don't contain generate_template
+            labels = [label_template.format(calculation=cal, ans=ans) for cal, ans in zip(sample["calculation"], sample["ans"])]
+        else:
+            labels = [label_template.format(cot = cot, ans = ans) for cot, ans in zip(sample["generate_template"], sample["ans"])]
 
-        model_inputs["labels"] = labels["input_ids"]
+        model_labels = tokenizer(text_target=labels, truncation=False)
 
+        model_inputs["labels"] = model_labels["input_ids"]
+        
         return model_inputs
 
     set_seed(args.seed)
 
-    hg_template = instr_template()
-    hg_template.load_hg_template()
+    hr_template = instr_template()
+    hr_template.load_hr_template()
 
-    if args.has_demonstrations:
-        input_template = hg_template.input_template['icl']
+    if args.is_cot:
+        input_template = hr_template.input_template['cot']
+        label_template = hr_template.label_template['cot']
     else:
-        input_template = hg_template.input_template['instr']
+        input_template = hr_template.input_template['opt']
+        label_template = hr_template.label_template['opt']
 
     model_name = args.model_name
     data_train_pth = args.data_train_pth
@@ -219,16 +237,16 @@ def run(args):
 
     if args.task == "train":
         dataset_train = read_jsonl(data_train_pth)[0]
-        dataset_train = Dataset.from_dict(dropout_redundant_hg(dataset_train))
+        dataset_train = Dataset.from_dict(dropout_redundant_hr(dataset_train))
 
         datasets['train'] = dataset_train
         if args.has_dev:
             dataset_dev = read_jsonl(data_dev_pth)[0]
-            dataset_dev = Dataset.from_dict(dropout_redundant_hg(dataset_dev))
+            dataset_dev = Dataset.from_dict(dropout_redundant_hr(dataset_dev))
             datasets['dev'] = dataset_dev
         else:
             dataset_test = read_jsonl(data_test_pth)[0]
-            dataset_test = Dataset.from_dict(dropout_redundant_hg(dataset_test))
+            dataset_test = Dataset.from_dict(dropout_redundant_hr(dataset_test))
             datasets['dev'] = dataset_test
         
         tokenized_dataset = datasets.map(preprocess_function, batched=True, remove_columns=["news", "headline", "similar_news", "similar_headline"])
@@ -242,17 +260,15 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="training code")
-    parser.add_argument("--data_train_pth", default='./numeval_datasets/Train_Headline_Generation_Similarity_Search.json', help="dataset_train's path")
-    parser.add_argument("--data_dev_pth", default='./numeval_datasets/Dev_Headline_Generation_Similarity_Search.json', help="dataset_dev's path")
-    parser.add_argument("--data_test_pth", default='./numeval_datasets/ANS-Test_Headline_Generation_Similarity_Search.json', help="dataset_test's path")
-    parser.add_argument("--num_gt_path", default="./numeval_datasets/number_gt.txt", type=str, help="numerical ground truth path")
-    parser.add_argument("--num_type_path", default="./numeval_datasets/number_type.txt", type=str, help="type of each summary, 1:Reasoning, 0:Copy")
+    parser.add_argument("--data_train_pth", default='./numeval_datasets/Train_Numerical_Reasoning_Template_CoT.json', help="dataset_train's path")
+    parser.add_argument("--data_dev_pth", default='./numeval_datasets/Dev_Numerical_Reasoning_Template_CoT.json', help="dataset_dev's path")
+    parser.add_argument("--data_test_pth", default='./numeval_datasets/ANS-Test_Numerical_Reasoning.json', help="dataset_test's path")
     parser.add_argument("--has_dev", default=True, help="whether has dev dataset")
-    parser.add_argument("--has_demonstrations", default=False, help="whether has demonstrations")
+    parser.add_argument("--is_cot", default=False, help="whether has demonstrations")
     parser.add_argument("--model_name", default='google/flan-t5-base', help="model name")
     parser.add_argument("--seed", default=42, help="set seed")
     parser.add_argument("--model_checkpoint", default='', help="model checkpoint's path")
-    parser.add_argument("--task", default='eval', help="train or predict")
+    parser.add_argument("--task", default='train', help="train or predict")
     parser.add_argument("--evaluation_strategy", default='epoch', help="evaluation_strategy")
     parser.add_argument("--save_strategy", default='epoch', help="save_strategy")
     parser.add_argument('--per_device_train_batch_size', type=int, default=16)
@@ -261,7 +277,7 @@ if __name__ == '__main__':
     parser.add_argument('--warm_up_radio', type=float, default=0.1)
     parser.add_argument('--gradient_accumulation_steps', default=1, help='gradient_accumulation')
     parser.add_argument('--num_train_epochs', default=10)
-    parser.add_argument('--output_model_path', type=str, default='./hg_model')
+    parser.add_argument('--output_model_path', type=str, default='/root/autodl-tmp/hr_model')
     parser.add_argument('--weight_decay', default=0.01, help='dropout_rate')
     parser.add_argument("--output_file_name", default="hg_res.json", help="output file's name")
     parser.add_argument("--output_dir", default="save_res", help="output file's dir")

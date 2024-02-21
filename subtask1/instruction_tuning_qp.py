@@ -213,7 +213,7 @@ if __name__ == '__main__':
     parser.add_argument("--data_train_pth", default='./Quantitative-101/QP/Numeracy600K_comment_train.json', help="dataset_train's path")
     parser.add_argument("--data_dev_pth", default='./Quantitative-101/QP/Numeracy600K_comment_dev.json', help="dataset_dev's path")
     parser.add_argument("--data_test_pth", default='./Quantitative-101/QP/Numeracy600K_comment_test.json', help="dataset_test's path")
-    parser.add_argument("--is_digit_base", default=False, help="whether to use digit")
+    parser.add_argument("--is_digit_base", default=True, help="whether to use digit")
     parser.add_argument("--dataset_type", default='comment', help="comment or headline")
     parser.add_argument("--has_demonstrations", default=True, help="whether has demonstrations")
     parser.add_argument("--model_name", default='google/flan-t5-base', help="model name")

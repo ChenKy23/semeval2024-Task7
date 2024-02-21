@@ -43,7 +43,7 @@ def train_and_evaluate(args, tokenizer, tokenized_dataset):
 
     model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name)
 
-    f1_metric = evaluate.load("/root/semeval2024-A40/f1.py")
+    f1_metric = evaluate.load("./f1.py")
 
     label_pad_token_id = -100
 
@@ -114,7 +114,7 @@ def predict_and_save_res(args, tokenizer=None, tokenized_dataset=None, dataset_t
         preds = [0 if item.startswith("Option 1") else 1 for item in preds_out]
         return preds, preds_out
 
-    f1_metric = evaluate.load("/root/semeval2024-A40/f1.py")
+    f1_metric = evaluate.load("./f1.py")
 
     model = AutoModelForSeq2SeqLM.from_pretrained(args.model_checkpoint)
 
@@ -226,7 +226,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_train_epochs', default=25)
     parser.add_argument('--output_model_path', type=str, default='./qqa_model')
     parser.add_argument('--weight_decay', default=0.01, help='dropout_rate')
-    parser.add_argument("--output_file_name", default="qqa_res.json", help="output file's name")
+    parser.add_argument("--output_file_name", default="save_res_qnli.json", help="output file's name")
     parser.add_argument("--output_dir", default="save_res", help="output file's dir")
     args = parser.parse_args()
      
