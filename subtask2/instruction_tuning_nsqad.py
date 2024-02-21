@@ -83,13 +83,13 @@ C {{option3}}
 D {{option4}}"""
         
         self.input_template['icl_en'] = f"""According to the news, Choose the correct option for [Num] in the following questions.
-# news: {{news_article}}
-# question: {{question}}
-# option:
-# A {{option1}}
-# B {{option2}}
-# C {{option3}} 
-# D {{option4}}"""
+news: {{news_article}}
+question: {{question}}
+option:
+A {{option1}}
+B {{option2}}
+C {{option3}} 
+D {{option4}}"""
 
         self.label_template['ans'] = f"""{{ans}} {{num}}"""
 
