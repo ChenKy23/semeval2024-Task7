@@ -339,7 +339,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_train_epochs', default=10)
     parser.add_argument('--output_model_path', type=str, default='./nsqad-model')
     parser.add_argument('--weight_decay', default=0.01, help='dropout_rate')
-    parser.add_argument("--output_file_name", default="save_res_qnli.json", help="output file's name")
+    parser.add_argument("--output_file_name", default="save_res_nquad.json", help="output file's name")
     parser.add_argument("--output_dir", default="save_res", help="output file's dir")
     args = parser.parse_args()
      
